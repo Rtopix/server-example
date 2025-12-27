@@ -1,186 +1,112 @@
-// Сервер для LiveTalk
-// Используйте Express + Socket.io для WebSocket
-
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const crypto = require('crypto');
+const mongoose = require('mongoose');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: "*", // В продакшене укажите конкретные домены
-    methods: ["GET", "POST"]
-  }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 app.use(cors());
 app.use(express.json());
 
-// Простое хранилище в памяти (в продакшене используйте БД)
-const users = new Map();
-const messages = new Map();
-const favorites = new Map();
+// ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ
+// Эту переменную мы добавим в настройки Koyeb
+const MONGODB_URI = process.env.MONGODB_URI;
 
-// ========== ПОЛЬЗОВАТЕЛИ ==========
+mongoose.connect(MONGODB_URI)
+  .then(() => console.log('Connected to MongoDB Atlas!'))
+  .catch(err => console.error('DB Connection Error:', err));
 
-app.get('/api/users', (req, res) => {
-  res.json(Array.from(users.values()));
+// СХЕМЫ ДАННЫХ
+const UserSchema = new mongoose.Schema({
+  email: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+  displayName: String,
+  status: { type: String, default: 'Не в сети' },
+  avatar: { type: String, default: 'default.png' },
+  statusMessage: { type: String, default: '' },
+  lastSeen: { type: Date, default: Date.now }
 });
 
-app.get('/api/users/:email', (req, res) => {
-  const user = users.get(req.params.email);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json(user);
+const MessageSchema = new mongoose.Schema({
+  from: String,
+  to: String,
+  text: String,
+  timestamp: { type: Date, default: Date.now },
+  read: { type: Boolean, default: false }
 });
 
-app.post('/api/users', (req, res) => {
-  const { email, password, displayName } = req.body;
-  
-  if (users.has(email)) {
-    return res.status(400).json({ error: 'User already exists' });
-  }
-  
-  const user = {
-    email,
-    password, // В продакшене хешируйте пароль!
-    displayName: displayName || email.split('@')[0],
-    status: 'Доступен',
-    avatar: 'default.png',
-    statusMessage: '',
-    lastSeen: new Date().toISOString(),
-    token: `token_${Date.now()}_${Math.random()}` // Простой токен
-  };
-  
-  users.set(email, user);
-  res.json(user);
-});
+const User = mongoose.model('User', UserSchema);
+const Message = mongoose.model('Message', MessageSchema);
 
-app.put('/api/users/:email', (req, res) => {
-  const user = users.get(req.params.email);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  
-  Object.assign(user, req.body);
-  users.set(req.params.email, user);
-  res.json(user);
-});
+function hashPassword(password) {
+  const salt = 'livetalk_salt_secret'; 
+  return crypto.scryptSync(password, salt, 64).toString('hex');
+}
 
-// ========== СООБЩЕНИЯ ==========
-
-app.get('/api/messages', (req, res) => {
-  const { from, to } = req.query;
-  const key = `${from}_${to}`;
-  const reverseKey = `${to}_${from}`;
-  
-  const msgs1 = messages.get(key) || [];
-  const msgs2 = messages.get(reverseKey) || [];
-  
-  const allMessages = [...msgs1, ...msgs2].sort((a, b) => 
-    new Date(a.timestamp) - new Date(b.timestamp)
-  );
-  
-  res.json(allMessages);
-});
-
-app.post('/api/messages', (req, res) => {
-  const { from, to, text } = req.body;
-  
-  const message = {
-    from,
-    to,
-    text,
-    timestamp: new Date().toISOString(),
-    read: false
-  };
-  
-  const key = `${from}_${to}`;
-  if (!messages.has(key)) {
-    messages.set(key, []);
-  }
-  messages.get(key).push(message);
-  
-  // Отправляем через WebSocket получателю
-  io.emit('new_message', { contact: from, message });
-  
-  res.json(message);
-});
-
-app.get('/api/messages/unread', (req, res) => {
-  const { user, contact } = req.query;
-  const key = `${contact}_${user}`;
-  const msgs = messages.get(key) || [];
-  
-  const unreadCount = msgs.filter(m => m.to === user && !m.read).length;
-  res.json({ count: unreadCount });
-});
-
-app.post('/api/messages/read', (req, res) => {
-  const { user, contact } = req.body;
-  const key = `${contact}_${user}`;
-  const msgs = messages.get(key) || [];
-  
-  msgs.forEach(m => {
-    if (m.to === user) m.read = true;
-  });
-  
-  res.json({ success: true });
-});
-
-// ========== ИЗБРАННОЕ ==========
-
-app.get('/api/favorites', (req, res) => {
-  const { user } = req.query;
-  const favs = favorites.get(user) || [];
-  res.json(favs);
-});
-
-app.post('/api/favorites', (req, res) => {
-  const { user, contact } = req.body;
-  
-  if (!favorites.has(user)) {
-    favorites.set(user, []);
-  }
-  
-  const favs = favorites.get(user);
-  if (!favs.includes(contact)) {
-    favs.push(contact);
-  }
-  
-  res.json({ success: true });
-});
-
-app.delete('/api/favorites', (req, res) => {
-  const { user, contact } = req.body;
-  const favs = favorites.get(user) || [];
-  const filtered = favs.filter(f => f !== contact);
-  favorites.set(user, filtered);
-  res.json({ success: true });
-});
-
-// ========== WEBSOCKET ==========
+// SOCKET.IO ЛОГИКА
+const userSockets = new Map();
 
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
-  
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+  socket.on('join', async (email) => {
+    userSockets.set(email, socket.id);
+    socket.email = email;
+    await User.findOneAndUpdate({ email }, { status: 'Доступен', lastSeen: new Date() });
+    io.emit('user_status_change', { email, status: 'Доступен' });
+  });
+
+  socket.on('send_message', async (data) => {
+    const newMessage = new Message(data);
+    await newMessage.save();
+    const recipientSocketId = userSockets.get(data.to);
+    if (recipientSocketId) io.to(recipientSocketId).emit('receive_message', newMessage);
+    socket.emit('receive_message', newMessage);
+  });
+
+  socket.on('disconnect', async () => {
+    if (socket.email) {
+      userSockets.delete(socket.email);
+      await User.findOneAndUpdate({ email: socket.email }, { status: 'Не в сети', lastSeen: new Date() });
+      io.emit('user_status_change', { email: socket.email, status: 'Не в сети' });
+    }
   });
 });
 
-// WebSocket endpoint для обновлений
-io.use((socket, next) => {
-  const token = socket.handshake.query.token;
-  // В продакшене проверяйте токен
-  next();
+// API РОУТЫ
+app.post('/api/users', async (req, res) => {
+  try {
+    const { email, password, displayName } = req.body;
+    const existing = await User.findOne({ email });
+    if (existing) return res.status(400).json({ error: 'User exists' });
+    
+    const user = new User({ email, password: hashPassword(password), displayName });
+    await user.save();
+    res.json(user);
+  } catch (e) { res.status(500).send(e.message); }
 });
 
-// Cyclic.sh и другие платформы автоматически устанавливают PORT
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  const user = await User.findOne({ email });
+  if (!user || user.password !== hashPassword(password)) return res.status(401).json({ error: 'Invalid' });
+  res.json(user);
+});
+
+app.get('/api/users', async (req, res) => {
+  const users = await User.find({}, '-password');
+  res.json(users);
+});
+
+app.get('/api/messages', async (req, res) => {
+  const { from, to } = req.query;
+  const msgs = await Message.find({
+    $or: [{ from, to }, { from: to, to: from }]
+  }).sort('timestamp');
+  res.json(msgs);
+});
+
 const PORT = process.env.PORT || 3000;
-
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`WebSocket available at ws://localhost:${PORT}`);
-  console.log(`API available at http://localhost:${PORT}/api`);
-});
-
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
