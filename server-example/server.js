@@ -12,14 +12,14 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(cors());
 app.use(express.json());
 
-// Подключение к MongoDB через переменную окружения
+// Подключение к MongoDB через переменную, которую ты добавил в Koyeb
 const MONGODB_URI = process.env.MONGODB_URI;
 
 mongoose.connect(MONGODB_URI)
-  .then(() => console.log('Connected to MongoDB Atlas!'))
-  .catch(err => console.error('DB Connection Error:', err));
+  .then(() => console.log('✅ Connected to MongoDB Atlas!'))
+  .catch(err => console.error('❌ DB Connection Error:', err));
 
-// Схемы данных (аналог твоих JSON файлов)
+// Схемы данных (аналог твоих JSON файлов, но в облаке)
 const UserSchema = new mongoose.Schema({
   email: { type: String, unique: true, required: true },
   password: { type: String, required: true },
@@ -46,7 +46,7 @@ function hashPassword(password) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
-// Socket.io (Мессенджер)
+// Socket.io (Механика мессенджера)
 const userSockets = new Map();
 
 io.on('connection', (socket) => {
@@ -74,7 +74,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// API (Логин и Регистрация)
+// API (Регистрация, логин и история)
 app.post('/api/users', async (req, res) => {
   try {
     const { email, password, displayName } = req.body;
@@ -107,4 +107,4 @@ app.get('/api/messages', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
