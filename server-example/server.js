@@ -12,15 +12,14 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(cors());
 app.use(express.json());
 
-// ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ
-// Эту переменную мы добавим в настройки Koyeb
+// Подключение к MongoDB через переменную окружения
 const MONGODB_URI = process.env.MONGODB_URI;
 
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('Connected to MongoDB Atlas!'))
   .catch(err => console.error('DB Connection Error:', err));
 
-// СХЕМЫ ДАННЫХ
+// Схемы данных (аналог твоих JSON файлов)
 const UserSchema = new mongoose.Schema({
   email: { type: String, unique: true, required: true },
   password: { type: String, required: true },
@@ -47,7 +46,7 @@ function hashPassword(password) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
-// SOCKET.IO ЛОГИКА
+// Socket.io (Мессенджер)
 const userSockets = new Map();
 
 io.on('connection', (socket) => {
@@ -75,13 +74,12 @@ io.on('connection', (socket) => {
   });
 });
 
-// API РОУТЫ
+// API (Логин и Регистрация)
 app.post('/api/users', async (req, res) => {
   try {
     const { email, password, displayName } = req.body;
     const existing = await User.findOne({ email });
     if (existing) return res.status(400).json({ error: 'User exists' });
-    
     const user = new User({ email, password: hashPassword(password), displayName });
     await user.save();
     res.json(user);
