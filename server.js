@@ -12,14 +12,12 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(cors());
 app.use(express.json());
 
-// Подключение к MongoDB через переменную, которую ты добавил в Koyeb
 const MONGODB_URI = process.env.MONGODB_URI;
 
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('✅ Connected to MongoDB Atlas!'))
   .catch(err => console.error('❌ DB Connection Error:', err));
 
-// Схемы данных (аналог твоих JSON файлов, но в облаке)
 const UserSchema = new mongoose.Schema({
   email: { type: String, unique: true, required: true },
   password: { type: String, required: true },
@@ -46,9 +44,8 @@ function hashPassword(password) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
-// Socket.io (Механика мессенджера)
+// Socket.io
 const userSockets = new Map();
-
 io.on('connection', (socket) => {
   socket.on('join', async (email) => {
     userSockets.set(email, socket.id);
@@ -74,7 +71,8 @@ io.on('connection', (socket) => {
   });
 });
 
-// API (Регистрация, логин и история)
+// API РОУТЫ
+// Регистрация
 app.post('/api/users', async (req, res) => {
   try {
     const { email, password, displayName } = req.body;
@@ -86,11 +84,31 @@ app.post('/api/users', async (req, res) => {
   } catch (e) { res.status(500).send(e.message); }
 });
 
+// Логин
 app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
-  const user = await User.findOne({ email });
-  if (!user || user.password !== hashPassword(password)) return res.status(401).json({ error: 'Invalid' });
+  const user = await User.findOne({ email: req.body.email });
+  if (!user || user.password !== hashPassword(req.body.password)) return res.status(401).json({ error: 'Invalid' });
   res.json(user);
+});
+
+// ПОЛУЧЕНИЕ ОДНОГО ЮЗЕРА (Нужно при входе в настройки)
+app.get('/api/users/:email', async (req, res) => {
+  const user = await User.findOne({ email: req.params.email }, '-password');
+  if (!user) return res.status(404).json({ error: 'Not found' });
+  res.json(user);
+});
+
+// ОБНОВЛЕНИЕ ПРОФИЛЯ (Тот самый роут, которого не хватало!)
+app.put('/api/users/:email', async (req, res) => {
+  try {
+    const updatedUser = await User.findOneAndUpdate(
+      { email: req.params.email },
+      { $set: req.body },
+      { new: true, fields: '-password' }
+    );
+    if (!updatedUser) return res.status(404).json({ error: 'User not found' });
+    res.json(updatedUser);
+  } catch (e) { res.status(500).send(e.message); }
 });
 
 app.get('/api/users', async (req, res) => {
@@ -99,9 +117,8 @@ app.get('/api/users', async (req, res) => {
 });
 
 app.get('/api/messages', async (req, res) => {
-  const { from, to } = req.query;
   const msgs = await Message.find({
-    $or: [{ from, to }, { from: to, to: from }]
+    $or: [{ from: req.query.from, to: req.query.to }, { from: req.query.to, to: req.query.from }]
   }).sort('timestamp');
   res.json(msgs);
 });
